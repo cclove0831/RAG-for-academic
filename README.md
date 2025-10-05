@@ -158,9 +158,3 @@ python eval.py --data_dir data/ --eval eval/eval_questions.jsonl
 * [ ] 运行 `python eval.py --data_dir data/ --eval eval/eval_questions.jsonl`
 * [ ] 查看 `DEBUG miss` 与指标输出；若有网络下载错误，先完成模型缓存
 
----
-
-
-
-
-需要我把“结构化切块（标题/句子感知 + 图表合并）”的最小替换版函数也写好放进 `cleaning.py` 吗？我可以给一份直接可粘贴的实现，与你当前接口兼容。
