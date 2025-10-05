@@ -10,15 +10,21 @@ def load_eval(path) -> List[Dict[str, Any]]:
 def has_citation(ans: str) -> bool:
     return bool(re.search(r"\[\d+\]", ans))
 
-def pred_pairs_from_docs(docs: List[Document]) -> List[Tuple[str, int]]:
+def pred_pairs_from_docs(docs: List[Document]) -> List[Tuple[str,int]]:
     pairs = set()
     for d in docs:
-        docid = str(d.metadata.get("doc", "NA"))
+        md = getattr(d, "metadata", {}) or {}
+        docid = md.get("doc", "NA")
+        page = md.get("page", -1)
+        # 强制 page 为 int
         try:
-            page = int(d.metadata.get("page", -1))
+            page = int(page)
         except Exception:
             page = -1
-        pairs.add((docid, page))
+        # 过滤掉无效 docid
+        if not docid or docid in ("NA",):
+            continue
+        pairs.add((str(docid), page))
     return list(pairs)
 
 def summarize(rows):

@@ -33,7 +33,7 @@ def build_indexes(chunks: List[Document]):
     emb = HuggingFaceEmbeddings(model_name=EMB_MODEL_NAME,
                                 model_kwargs={"device":DEVICE},
                                 encode_kwargs={"normalize_embeddings": True,"batch_size": EMB_BATCH})
-    vs = Chroma.from_documents(chunks, emb, persist_directory=str(Path(PERSIST_DIRNAME)))
+    vs = Chroma.from_documents(chunks, emb)
     dense = vs.as_retriever(search_type="mmr",
                             search_kwargs={"k": DENSE_K, "fetch_k": MMR_FETCH_K, "lambda_mult": MMR_LAMBDA})
     bm25_chunk = BM25Retriever.from_documents(chunks); bm25_chunk.k = BM25_K
