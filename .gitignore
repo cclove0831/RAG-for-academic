@@ -1,0 +1,6 @@
+chroma_db/
+chroma_db_eval/
+*.sqlite3
+*.bin
+*.idx
+*.log
