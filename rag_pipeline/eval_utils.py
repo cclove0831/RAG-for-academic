@@ -16,12 +16,12 @@ def pred_pairs_from_docs(docs: List[Document]) -> List[Tuple[str,int]]:
         md = getattr(d, "metadata", {}) or {}
         docid = md.get("doc", "NA")
         page = md.get("page", -1)
-        # 强制 page 为 int
+
         try:
             page = int(page)
         except Exception:
             page = -1
-        # 过滤掉无效 docid
+
         if not docid or docid in ("NA",):
             continue
         pairs.add((str(docid), page))

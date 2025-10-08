@@ -77,7 +77,7 @@ def main(data_dir: str=None, pdf: str=None, eval_path: str="eval/eval_questions.
         cited = 1 if has_citation(ans) else 0
         key_hit = 1 if any(k in ans.lower() for k in must) else 0
 
-        # 收集：lat, cited, key_hit, recall(strict), precision, recall_tol, doc_hit
+
         buckets["overall"].append((lat, cited, key_hit, recall, precision, recall_tol, doc_hit))
 
         if denom>0 and strict_hits==0:
