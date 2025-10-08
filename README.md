@@ -1,29 +1,17 @@
 # RAG-for-academic
-基于检索增强生成的论文问答助手
----
 
-
-> 面向学术论文的检索增强生成（RAG）小型工程：**页级 BM25 + 段级向量检索 + 交叉编码器重排**，内置**邻页预取 / 邻页补全**，返回带编号的证据片段，支持离线评测与日志定位。
-
-<p align="center">
-  <b>文档命中@k</b>：0.967　|　<b>严格页命中@k</b>：0.696　|　<b>±1页容错召回@k</b>：0.855  
-</p>
+面向学术论文的检索增强生成（RAG）小型工程：**页级 BM25 + 段级向量检索（BGE）+ 交叉编码器重排**，并内置**页路由与文档配额**，统一输出可证据的 `(doc/page/source)` 元数据，支持离线评测与**端到端基线对比**。检索与生成链路均为一键运行。 
 
 ---
 
-## ✨ 核心特性
+## ✨ 特性
 
-* **双索引混合检索**：
-
-  * 文档级路由：`doc-BM25`
-  * 页级路由：`page-BM25`（按每文档前 P 页；列表型问句自动放宽）
-  * 段级候选：向量检索（BGE 系列）与 `bm25-chunk` 混合
-* **交叉编码器重排**：对候选进行语义精排，避免关键词漂移
-* **邻页策略**：
-  * 预取：对入选页自动将 `page±1` 的 Top-1 预加入候选池
-  * 补全：重排后若仍缺邻页，兜底现取 1 条并加入最终上下文（遵守上下文与每页上限）
-* **可证据返回**：统一元数据 `doc/page/source`，回答带**编号引用**
-* **一键评测**：本地 `eval.py` 输出命中率、引用率、关键短语命中、延迟分布，并打印 `DEBUG miss` 方便定位
+* **混合候选池（dense + BM25-chunk）**：并行召回、去重后进入重排，降低关键词漂移。 
+* **页级路由（Page-BM25）**：在 *dense* 命中文档内做“中后段优先”的页选择，并过滤参考文献/致谢等噪声页。 
+* **交叉编码器重排**：`cross-encoder/ms-marco-MiniLM-L-6-v2`，chunk 级重排并支持长度裁剪。 
+* **文档/页配额与“深页位”**：先保 1 个深页路由位，再按配额筛入，平衡 precision 与上下文连续性。 
+* **（可选）邻页扩展**：对最终 Top-M 的 `(doc,page)` 做 ±2 近邻补全（默认关闭，可在配置开启）。 
+* **稳健元数据与可视前缀**：若缺失 `doc`，自动用 `source` 文件名兜底；打印上下文时带 `(doc, p.page)` 前缀，方便定位与评测。 
 
 ---
 
@@ -32,18 +20,18 @@
 ```
 .
 ├─ rag_pipeline/
-│  ├─ cleaning.py        # 清洗与切块
-│  ├─ indexing.py        # 构建向量与BM25索引
-│  ├─ retrieval.py       # 双索引检索 + 重排 + 邻页预取/补全（已启用）
-│  ├─ llm_chain.py       # 生成链路（带证据）
-│  ├─ utils.py, config.py
-├─ main.py               # 单次问答入口
-├─ eval.py               # 批量评测
-├─ eval_utils.py
-├─ data/                 # 论文PDF与中间产物（见下）
-└─ eval/
-   └─ eval_questions.jsonl  # 评测集（问法覆盖“贡献、分类、定义、对比、设计”等）
+│  ├─ cleaning.py        # 清洗与切块（含元数据兜底 & 内容前缀）
+│  ├─ indexing.py        # BGE 向量库 + BM25（doc/page/chunk）+ 交叉编码器
+│  ├─ retrieval.py       # 混合检索 + 页路由 + 重排 +（可选）邻页扩展
+│  ├─ llm_chain.py       # 生成链路（仅用上下文作答 + [编号] 引用）
+│  ├─ eval_utils.py, utils.py, config.py
+├─ main.py               # 单次问答入口（打印上下文与答案）
+├─ eval.py               # 评测（严格页命中、±1 容错、文献命中、引用率等）
+├─ eval_rag_baselines.py # 一键跑“dense-only / bm25-only”端到端基线
+└─ eval/eval_questions.jsonl
 ```
+
+（索引与重排配置见 `indexing.py`；评测与基线脚本见 `eval.py / eval_utils.py / eval_rag_baselines.py`。）   
 
 ---
 
@@ -52,106 +40,107 @@
 ### 1) 环境
 
 ```bash
-# Python 3.10+ 推荐
+# Python 3.10+
 pip install -r requirements.txt
-
-# 可选：HuggingFace 国内缓存（建议）：
-# 设置 HUGGINGFACE_HUB_CACHE 指向本地盘，断网情况下也能复用
 ```
 
 ### 2) 数据准备
 
 ```
 data/
-├─ pdfs/
-│   ├─ paper_001.pdf
-│   ├─ paper_002.pdf
-│   └─ ...
-└─ (运行后自动生成的索引与缓存)
+└─ pdfs/
+   ├─ paper_001.pdf
+   ├─ paper_002.pdf
+   └─ ...
 ```
 
-> 说明：`doc_id` 默认取 `source` 文件名（不含后缀），如 `paper_001`。若有补充稿/别名文件，文件名中带后缀即可（例如 `paper_004_iterative_optimization_structural_prior.pdf`）。
+> `doc_id` 会从文件名自动提取，如 `paper_001`。
 
-### 3) 运行
-
-单次问答：
+### 3) 单次问答
 
 ```bash
 python main.py --data_dir data/ --q "What are the two major modes of Photoacoustic Tomography?"
 ```
 
-离线评测：
+程序会：加载→清洗→切块→建索引→两阶段检索→打印上下文与答案。
+
+### 4) 离线评测（带容错）
 
 ```bash
 python eval.py --data_dir data/ --eval eval/eval_questions.jsonl
 ```
 
----
+输出包括：延迟 p50/p95、严格页命中@k、±1 页容错召回、文献级命中率@k、引用率、关键短语命中，并打印 `DEBUG miss` 以定位问题。 
 
-## 关键配置（无需改代码即可使用）
+> 运行时控制台会打印如：`per_doc_pages=5  pool=36  topN=20  final=4 | routed: pool+=13, topN=13, final=2` 的调试行，便于理解路由与配额的实际生效情况。
 
-`config.py` 已给出默认值。常用项：
+### 5) 端到端基线对比（推荐）
 
-* `MAX_TOTAL_CTX`：最终进入上下文的片段总数
-* `PER_PAGE_LIMIT`：同一页最多保留的片段数
-* `POOL_CAP`：候选池上限
-* `PER_DOC_PAGES`：每个文档通过页级路由选取的页数上限
-* `RERANK_CLIP`：交叉编码器重排的文本截断长度
+```bash
+python eval_rag_baselines.py --data_dir data/ --eval eval/eval_questions.jsonl
+```
 
-> 注：当前仓库实现的**邻页预取/补全**为代码内置策略（不依赖新配置项），即使不调整 `config.py` 也会生效。
+一次性跑出 `rag_dense_only` 与 `rag_bm25_only` 两条端到端基线（召回 + 生成 + 引用检测），用于与主系统对比。 
 
 ---
 
-## 评测指标（实测）
+## 关键配置（`.env` 或环境变量覆盖）
 
-本地跑出的典型结果（30问）：
-
-* **文档命中@k**：0.967
-* **严格页命中@k**：0.696
-* **±1页容错召回@k**：0.855
-* **引用率**：1.0
-* **关键短语命中**：1.0
-* **延迟**：p50 ≈ 5–9s，p95 ≈ 9–10s（取决于模型缓存/网络）
-
-> 解释：最初严格页命中 ~0.587。通过**邻页预取 + 邻页补全 + 放宽重排截断**，严格页命中提升到 ~0.696，±1 容错 0.855，文档命中 0.967。剩余 miss 多因“页级路由漏掉含图注/定义句的关键页”，下一步通过**结构化切块**继续优化。
+* `MAX_TOTAL_CTX`：最终进入上下文的片段数（默认 4）
+* `PER_PAGE_LIMIT`：同一页最多保留的片段数（默认 3）
+* `PER_DOC_PAGES`：页路由每文档最多探查的页数（默认 5）
+* `DOC_ROUTE_K`：文档级 BM25 的路由数量（默认 6）
+* `RERANK_CLIP`：交叉编码器重排的文本截断长度（默认 1200）
+* `USE_NEIGHBOR_EXPAND` / `NEIGHBOR_EXPAND_TOP_M`：是否启用邻页扩展以及对 Top-M 的扩展阈值（默认关闭，`0`）
+* 其它：`EMB_MODEL_NAME`、`DENSE_K/BM25_K`、`MMR_*`、`RERANK_TOPN`、`DEVICE/CE_DEVICE` 等
+  （完整默认值见 `config.py`。） 
 
 ---
 
-## 实现要点
+## 原理简述
 
-* **双索引混合检索**
-
-  1. `doc_bm25` 路由出候选文档；
-  2. `page_bm25` 在候选文档内挑出前 P 页；
-  3. dense/bm25-chunk 作为段级补充；
-  4. 页内向量 Top-1 + 邻页预取，保证跨页上下文完整性。
-
-* **邻页策略**
-
-  * *预取*：在建池阶段对每个入选页预取 `page±1` 的 Top-1；
-  * *补全*：重排后若该邻页仍不在最终集合中，则兜底向量检索 1 条加入（遵守 `MAX_TOTAL_CTX` 与 `PER_PAGE_LIMIT`）。
-
-* **元数据稳定**
-
-  * 若 `doc` 缺失（出现 `NA`/`paper`），用 `source` 的文件名 `stem` 兜底修复，确保 `(doc, page)` 正确统计与引用。
+* **两阶段检索**：并行混合召回 → 页级路由（优先中后段、过滤噪声）→ 交叉编码器重排（clip 后）→ **文档/页配额筛入 + 深页位** →（可选）邻页扩展 → 生成链路仅使用所给上下文作答并以 `[1]..[k]` 编号引用。    
 
 ---
 
+## 评测指标（本次实测，n=30）
 
-## 路线图（Roadmap）
+使用命令：
 
-* [ ] **切块升级**：标题/句子感知 + 图/表/公式合并 + token 级长度控制
-* [ ] **别名合并**：将 `paper_004_iterative_...` 等映射回主 `paper_004`，避免打分稀释
-* [ ] **多查询扩展**：同义词/中英混排的轻量 query 扩展
-* [ ] **判定优化**：评测增加 doc-level 容错与 “多页等价答案” 规则
+```bash
+python eval.py --data_dir data/ --eval eval/eval_questions.jsonl
+```
+
+**整体：**
+
+* **latency**：p50 = **4152.3 ms**，p95 = **5408.1 ms**
+* **citation_rate**：**1.000**
+* **keyphrase_hit_rate**：**1.000**
+* **strict recall@k**（严格页命中@k）：**0.737**
+* **precision@k**：**0.350**
+* **tolerant recall@k (±1 page)**：**0.822**
+* **doc hit rate@k**（文献级命中@k）：**0.967**
+
+> 指标统计口径见 `eval_utils.summarize()` 与 `eval.py`（其中严格页命中@k、±1 容错召回、文献级命中率@k、引用率与关键短语命中率的计算逻辑有明确定义）。 
 
 ---
+
 
 ## 复现清单（Checklist）
 
 * [ ] 创建并激活虚拟环境，安装依赖
 * [ ] 将 PDF 放入 `data/pdfs/`
-* [ ] 首次运行 `python main.py --data_dir data/ --q "..."` 以构建索引
-* [ ] 运行 `python eval.py --data_dir data/ --eval eval/eval_questions.jsonl`
-* [ ] 查看 `DEBUG miss` 与指标输出；若有网络下载错误，先完成模型缓存
+* [ ] 首次运行 `python main.py --data_dir data/ --q "..."` 构建索引
+* [ ] 运行 `python eval.py --data_dir data/ --eval eval/eval_questions.jsonl` 查看指标与 `DEBUG miss`
+* [ ] （可选）运行 `python eval_rag_baselines.py ...` 获取端到端基线
+
+---
+
+## Roadmap
+
+* [ ] **切块升级**：标题/句子感知 + 图/表/公式合并 + token 级长度控制
+* [ ] **别名合并**：将 `paper_004_iterative_...` 等映射回主 `paper_004`，避免打分稀释
+* [ ] **多查询扩展**：同义词/中英混排的轻量 query 扩展
+* [ ] **判定优化**：评测增加 doc-level 容错与“多页等价答案”规则
+
 
